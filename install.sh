@@ -53,9 +53,14 @@ echo ""
 # ── 5. Write the LaunchAgent plist ───────────────────────────────────────────
 mkdir -p "$HOME/Library/LaunchAgents"
 
+# Escape characters that are special in a sed replacement with | as delimiter.
+escape_sed_replacement() { printf '%s\n' "$1" | sed 's/[\\&|]/\\&/g'; }
+ESCAPED_INSTALL_DIR=$(escape_sed_replacement "$INSTALL_DIR")
+ESCAPED_LOG_DIR=$(escape_sed_replacement "$LOG_DIR")
+
 sed \
-    -e "s|INSTALL_DIR_PLACEHOLDER|${INSTALL_DIR}|g" \
-    -e "s|LOG_DIR_PLACEHOLDER|${LOG_DIR}|g" \
+    -e "s|INSTALL_DIR_PLACEHOLDER|${ESCAPED_INSTALL_DIR}|g" \
+    -e "s|LOG_DIR_PLACEHOLDER|${ESCAPED_LOG_DIR}|g" \
     "$PLIST_SRC" > "$PLIST_DEST"
 
 echo "✓ LaunchAgent plist written to $PLIST_DEST"

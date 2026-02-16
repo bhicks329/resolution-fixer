@@ -45,20 +45,22 @@ int main(int argc, char *argv[]) {
     SLSFn_IsEnabled  isEnabled  = (SLSFn_IsEnabled) dlsym(lib, "SLSDisplayIsDynamicGeometryEnabled");
     SLSFn_SetEnabled setEnabled = (SLSFn_SetEnabled)dlsym(lib, "SLSDisplaySetDynamicGeometryEnabled");
 
-    if (!supports || !setEnabled) {
+    if (!supports || !isEnabled || !setEnabled) {
         fprintf(stderr, "ERROR: SkyLight symbols not found (macOS version mismatch?)\n");
         return 1;
     }
 
-    CGDirectDisplayID displays[16];
+#define MAX_DISPLAYS 16
+    CGDirectDisplayID displays[MAX_DISPLAYS];
     uint32_t count = 0;
-    CGGetOnlineDisplayList(16, displays, &count);
+    CGGetOnlineDisplayList(MAX_DISPLAYS, displays, &count);
+    if (count > MAX_DISPLAYS) count = MAX_DISPLAYS;
 
     int acted = 0;
     for (uint32_t i = 0; i < count; i++) {
         CGDirectDisplayID id = displays[i];
         bool sup = supports(id);
-        bool cur = isEnabled ? isEnabled(id) : false;
+        bool cur = isEnabled(id);
 
         if (query) {
             printf("display %u: supportsDynamicGeometry=%s  isEnabled=%s\n",

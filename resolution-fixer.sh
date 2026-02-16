@@ -8,7 +8,6 @@ set -euo pipefail
 # ── Config ──────────────────────────────────────────────────────────────────
 LABEL="resolution-fixer"
 LOG_FILE="$HOME/Library/Logs/${LABEL}.log"
-STATE_FILE="/tmp/${LABEL}.state"
 CHECK_INTERVAL=2            # seconds between connection polls
 CONNECT_DELAY=5             # seconds to wait after detection before changing resolution
 RESTORE_ON_DISCONNECT=true  # set false to keep the new resolution after disconnect
@@ -107,10 +106,10 @@ set_max_resolution() {
 
     # Preserve the current origin and rotation from the existing config line
     local origin degree
-    origin=$(echo "$raw" | grep '^displayplacer ' | grep -Eo 'origin:\([^)]*\)' | head -1)
-    degree=$(echo "$raw"  | grep '^displayplacer ' | grep -Eo 'degree:[0-9]+'    | head -1)
-    origin="${origin:-origin:(0,0)}"
-    degree="${degree:-degree:0}"
+    origin=$(echo "$raw" | grep '^displayplacer ' | grep -Eo 'origin:\(-?[0-9]+,-?[0-9]+\)' | head -1)
+    degree=$(echo "$raw"  | grep '^displayplacer ' | grep -Eo 'degree:[0-9]+'                 | head -1)
+    [[ "$origin" =~ ^origin:\(-?[0-9]+,-?[0-9]+\)$ ]] || origin="origin:(0,0)"
+    [[ "$degree" =~ ^degree:[0-9]+$                 ]] || degree="degree:0"
 
     # Always try with scaling:on first (Dynamic resolution); fall back to the
     # mode's native scaling if displayplacer rejects the combination.
@@ -146,7 +145,10 @@ is_screen_sharing_active() {
 # ── Main loop ────────────────────────────────────────────────────────────────
 main() {
     mkdir -p "$(dirname "$LOG_FILE")"
+    STATE_FILE=$(mktemp -t "${LABEL}.state.XXXXXXXX")
+    trap 'rm -f "$STATE_FILE"' EXIT
     log "=== ${LABEL} started (PID $$, displayplacer: $DISPLAYPLACER) ==="
+    log "State file: $STATE_FILE"
 
     local display_id
     display_id=$(get_display_id)
@@ -158,13 +160,16 @@ main() {
     log "Monitoring display: $display_id"
 
     local was_sharing=false
-    local original_config=""
+    local -a original_config=()
 
     while true; do
         if is_screen_sharing_active; then
             if [[ "$was_sharing" == false ]]; then
                 log "Screen Sharing session detected — waiting ${CONNECT_DELAY}s for display to settle."
-                original_config=$(get_current_config || true)
+                original_config=()
+                while IFS= read -r _arg; do
+                    [[ -n "$_arg" ]] && original_config+=("$_arg")
+                done < <(get_current_config | xargs -n1 printf '%s\n' 2>/dev/null || true)
                 was_sharing=true
                 echo "active" > "$STATE_FILE"
                 sleep "$CONNECT_DELAY"
@@ -177,11 +182,11 @@ main() {
                 was_sharing=false
                 echo "idle" > "$STATE_FILE"
 
-                if [[ "$RESTORE_ON_DISCONNECT" == true && -n "$original_config" ]]; then
+                if [[ "$RESTORE_ON_DISCONNECT" == true && "${#original_config[@]}" -gt 0 ]]; then
                     log "Restoring original resolution."
-                    "$DISPLAYPLACER" $original_config \
+                    "$DISPLAYPLACER" "${original_config[@]}" \
                         || log "WARNING: Failed to restore original resolution."
-                    original_config=""
+                    original_config=()
                 fi
             fi
         fi
