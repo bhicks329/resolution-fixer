@@ -12,6 +12,7 @@ This tool eliminates that entirely. It watches for incoming connections and hand
 
 - Detects an incoming Screen Sharing / VNC connection on port 5900
 - Waits a few seconds for the display to settle, then switches to the highest available resolution with Dynamic Resolution enabled
+- **Intelligently handles locked screens** — automatically retries if the machine is at the login window, waiting for you to unlock before applying the resolution change
 - Restores your original display settings when the session ends
 - Runs silently in the background as a LaunchAgent, starting automatically at login
 
@@ -21,6 +22,7 @@ This tool eliminates that entirely. It watches for incoming connections and hand
 2. On connection: waits a few seconds for the display to settle, then:
    - Uses `displayplacer` to switch the host display to the highest available resolution.
    - Calls `SLSDisplaySetDynamicGeometryEnabled` via the SkyLight private framework — the same API that System Settings > Displays uses for the "Dynamic resolution" toggle.
+   - **If the machine is locked:** detects the lock state and automatically retries, re-querying the display configuration after each unlock attempt (display IDs can change after login).
 3. On disconnect: restores the original resolution and dynamic resolution state.
 4. A LaunchAgent keeps it running in the background, restarting automatically at login.
 
@@ -62,6 +64,17 @@ Edit the variables near the top of `resolution-fixer.sh`:
 | `CHECK_INTERVAL` | `2` | Seconds between connection polls |
 | `CONNECT_DELAY` | `5` | Seconds to wait after detection before applying changes |
 | `RESTORE_ON_DISCONNECT` | `true` | Restore original resolution when the session ends |
+| `MAX_RETRIES` | `10` | Maximum retry attempts if display is locked or unavailable |
+| `RETRY_DELAY` | `3` | Seconds to wait between retry attempts |
+
+After changing configuration, reload the service:
+
+```bash
+launchctl unload ~/Library/LaunchAgents/com.resolution-fixer.plist
+launchctl load ~/Library/LaunchAgents/com.resolution-fixer.plist
+```
+
+Or simply re-run `bash install.sh` to update and reload.
 
 ## Logs
 
@@ -75,7 +88,22 @@ tail -f ~/Library/Logs/resolution-fixer.log
 
 - Confirm Screen Sharing is enabled and a client can connect.
 - Check that `displayplacer` works: `displayplacer list`
-- Check logs: `tail -f ~/Library/Logs/resolution-fixer.error.log`
+- Check logs: `tail -f ~/Library/Logs/resolution-fixer.log`
+
+### Locked screen behavior
+
+When connecting to a locked Mac, the tool will:
+
+1. Detect the lock state (login window or screensaver)
+2. Retry automatically every 3 seconds (configurable via `RETRY_DELAY`)
+3. Re-query the display configuration on each attempt (display IDs can change after unlock)
+4. Apply the resolution change as soon as you unlock the machine
+
+Check the logs to see retry attempts:
+
+```bash
+tail -f ~/Library/Logs/resolution-fixer.log
+```
 
 ### LaunchAgent status
 

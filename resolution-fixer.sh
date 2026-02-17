@@ -11,6 +11,8 @@ LOG_FILE="$HOME/Library/Logs/${LABEL}.log"
 CHECK_INTERVAL=2            # seconds between connection polls
 CONNECT_DELAY=5             # seconds to wait after detection before changing resolution
 RESTORE_ON_DISCONNECT=true  # set false to keep the new resolution after disconnect
+MAX_RETRIES=10              # max attempts to set resolution if display is locked
+RETRY_DELAY=3               # seconds to wait between retries
 
 # ── Logging ─────────────────────────────────────────────────────────────────
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" >> "$LOG_FILE"; }
@@ -36,6 +38,28 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DYNAMIC_RES_BIN="$SCRIPT_DIR/set-dynamic-resolution"
 
 # ── Display helpers ──────────────────────────────────────────────────────────
+
+# Checks if the screen is locked or at the login window.
+is_screen_locked() {
+    # Check if loginwindow process is the console user (indicates lock screen)
+    # or if screensaver is running with password required
+    local console_user
+    console_user=$(stat -f '%Su' /dev/console 2>/dev/null)
+
+    # If console user is _mbsetupuser or loginwindow, screen is locked
+    if [[ "$console_user" == "_mbsetupuser" || "$console_user" == "loginwindow" ]]; then
+        return 0
+    fi
+
+    # Check if screen saver is running and password required on wake
+    # This requires checking the running processes
+    if pgrep -q "ScreenSaverEngine"; then
+        # Screen saver is running, likely locked if password is required
+        return 0
+    fi
+
+    return 1
+}
 
 # Returns the persistent display ID of the first active display.
 get_display_id() {
@@ -133,6 +157,56 @@ set_max_resolution() {
     fi
 }
 
+# Attempts to set max resolution with retry logic for locked screens.
+set_max_resolution_with_retry() {
+    local attempt=1
+
+    while (( attempt <= MAX_RETRIES )); do
+        # Re-fetch display ID on each attempt in case it changed after unlock
+        local id
+        id=$(get_display_id)
+
+        if [[ -z "$id" ]]; then
+            log "No display ID found (attempt $attempt/$MAX_RETRIES). Waiting ${RETRY_DELAY}s before retry..."
+            sleep "$RETRY_DELAY"
+            (( attempt++ ))
+            continue
+        fi
+
+        log "Attempting to set max resolution for display $id (attempt $attempt/$MAX_RETRIES)"
+
+        if set_max_resolution "$id"; then
+            log "Successfully set max resolution."
+            return 0
+        fi
+
+        # Failed - check if screen is locked
+        if is_screen_locked; then
+            log "Screen appears to be locked. Waiting ${RETRY_DELAY}s before retry..."
+            sleep "$RETRY_DELAY"
+            (( attempt++ ))
+        else
+            # Not locked, but still failed - might be a different issue
+            # Check if we can at least query the display
+            local display_found
+            display_found=$("$DISPLAYPLACER" list 2>/dev/null | grep -c "Persistent screen id: ${id}" || true)
+
+            if (( display_found == 0 )); then
+                log "Display $id not found in displayplacer output. Waiting ${RETRY_DELAY}s before retry..."
+                sleep "$RETRY_DELAY"
+                (( attempt++ ))
+            else
+                # Display is found but modes couldn't be parsed - this is a real error
+                log "ERROR: Display found but modes couldn't be parsed. Giving up after attempt $attempt."
+                return 1
+            fi
+        fi
+    done
+
+    log "ERROR: Failed to set max resolution after $MAX_RETRIES attempts."
+    return 1
+}
+
 # ── Connection detection ─────────────────────────────────────────────────────
 
 is_screen_sharing_active() {
@@ -150,14 +224,14 @@ main() {
     log "=== ${LABEL} started (PID $$, displayplacer: $DISPLAYPLACER) ==="
     log "State file: $STATE_FILE"
 
-    local display_id
-    display_id=$(get_display_id)
-
-    if [[ -z "$display_id" ]]; then
-        log "ERROR: No display detected. Exiting."
-        exit 1
+    # Verify displayplacer can enumerate displays at startup
+    local initial_id
+    initial_id=$(get_display_id)
+    if [[ -z "$initial_id" ]]; then
+        log "WARNING: No display detected at startup. Will retry when connections are detected."
+    else
+        log "Initial display detected: $initial_id"
     fi
-    log "Monitoring display: $display_id"
 
     local was_sharing=false
     local -a original_config=()
@@ -174,7 +248,7 @@ main() {
                 echo "active" > "$STATE_FILE"
                 sleep "$CONNECT_DELAY"
                 log "Applying max resolution."
-                set_max_resolution "$display_id" || log "WARNING: Failed to set max resolution."
+                set_max_resolution_with_retry || log "WARNING: Failed to set max resolution after retries."
             fi
         else
             if [[ "$was_sharing" == true ]]; then
