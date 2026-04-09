@@ -210,10 +210,12 @@ set_max_resolution_with_retry() {
 # ── Connection detection ─────────────────────────────────────────────────────
 
 is_screen_sharing_active() {
-    # ESTABLISHED connection on port 5900 (macOS Screen Sharing / VNC)
+    # ESTABLISHED connection where the LOCAL address is port 5900 — meaning
+    # this machine is the destination (server), not the client connecting out.
+    # Column 4 is local address, column 5 is foreign address in netstat output.
     netstat -an 2>/dev/null \
-        | grep -E '\.(5900)\s' \
-        | grep -q 'ESTABLISHED'
+        | awk '$6 == "ESTABLISHED" && $4 ~ /\.5900$/' \
+        | grep -q .
 }
 
 # ── Main loop ────────────────────────────────────────────────────────────────
